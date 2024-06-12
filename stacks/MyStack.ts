@@ -27,11 +27,18 @@ export function API({ stack }: StackContext) {
 
   const SENDER_EMAIL = new Config.Secret(stack, 'SENDER_EMAIL'); // api 위에 추가
 
+  const TOSS_PAYMENTS_API_KEY = new Config.Secret(
+    stack,
+    'TOSS_PAYMENTS_API_KEY'
+  );
+  const BANANA_SECRET_KEY = new Config.Secret(stack, 'BANANA_SECRET_KEY');
+
+
   const api = new Api(stack, 'raymong_lecture', {
     cors: true,
     defaults: {
       function: {
-        bind: [SENDER_EMAIL,CollectionsTable,UploadsBucket],
+        bind: [SENDER_EMAIL, CollectionsTable, UploadsBucket,TOSS_PAYMENTS_API_KEY, BANANA_SECRET_KEY,],
       },
     },
     routes: {
@@ -59,6 +66,7 @@ export function API({ stack }: StackContext) {
       // 앞에 VITE_를 붙여야 클라이언트에서 접근 가능
       VITE_API_URL: api.customDomainUrl || api.url,
       VITE_APP_URL: 'http://localhost:5173',
+      VITE_TOSS_CLIENT_KEY: 'test_ck_jExPeJWYVQ4XPE7d5RWE349R5gvN',
     },
     buildOutput: 'dist',
     buildCommand: 'npm run build',

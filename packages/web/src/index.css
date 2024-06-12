@@ -70,3 +70,14 @@ button:hover,
     min-height: 500px;
   }
 }
+
+.content-wrapper {
+  width: 100%;
+}
+
+/* index.css */
+.payment-notification-text {
+  font-size: 35px;
+  font-weight: 400;
+  text-transform: uppercase;
+}

@@ -6,6 +6,7 @@ import { Table } from 'sst/node/table';
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import { S3, S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
+import fetch from "node-fetch";
 
 const dynamoDb = new DynamoDB({ region: 'ap-northeast-2' });
 const s3 = new S3({ region: 'ap-northeast-2' });
@@ -15,51 +16,51 @@ const BASE_PRICE = 3900;
 export const handler = async (event: APIGatewayProxyEventV2) => {
   if (event.requestContext.http.method === 'GET') {
     if (event.rawPath === '/collections') {
-     // get item from collections table
-     const collectionId = event.queryStringParameters?.collectionId;
+      // get item from collections table
+      const collectionId = event.queryStringParameters?.collectionId;
 
-     if (collectionId == undefined) {
-         return {
-             statusCode: 400,
-             body: JSON.stringify({
-                 error: true,
-                 message: 'Invalid request body',
-             }),
-         };
-     }
+      if (collectionId == undefined) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
+        };
+      }
 
-     const params = {
-         Key: { collectionId: { S: collectionId } },
-         TableName: Table.Collections.tableName,
-     };
+      const params = {
+        Key: { collectionId: { S: collectionId } },
+        TableName: Table.Collections.tableName,
+      };
 
-     const { Item } = await dynamoDb.getItem(params);
+      const { Item } = await dynamoDb.getItem(params);
 
-     if (!Item) {
-         return {
-             statusCode: 400,
-             body: JSON.stringify({
-                 error: true,
-                 message: 'Collection Id not exists',
-             }),
-         };
-     }
+      if (!Item) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Collection Id not exists',
+          }),
+        };
+      }
 
-     return {
-         statusCode: 200,
-         body: JSON.stringify({
-             cStatus: Item.cStatus.N,
-             name: Item.name.S,
-             email: Item.email.S,
-             createDatetime: Item.createDatetime.S,
-             startDatetime: Item.startDatetime.S,
-             endDatetime: Item.endDatetime.S,
-             kind: Item.kind.S,
-             paid: Item.paid.BOOL,
-             price: Item.price.N,
-             receipt: Item.receipt.S,
-         }),
-     };   
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          cStatus: Item.cStatus.N,
+          name: Item.name.S,
+          email: Item.email.S,
+          createDatetime: Item.createDatetime.S,
+          startDatetime: Item.startDatetime.S,
+          endDatetime: Item.endDatetime.S,
+          kind: Item.kind.S,
+          paid: Item.paid.BOOL,
+          price: Item.price.N,
+          receipt: Item.receipt.S,
+        }),
+      };
     } else if (event.rawPath === '/getImages') {
       return {
         statusCode: 200,
@@ -83,13 +84,13 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     } else if (event.rawPath === '/createCollection') {
       const collectionId = uuidv4();
       if (event.body == undefined) {
-          return {
-              statusCode: 400,
-              body: JSON.stringify({
-                  error: true,
-                  message: 'Invalid request body',
-              }),
-          };
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
+        };
       }
       const body = JSON.parse(event.body);
       const email = body.email;
@@ -102,105 +103,325 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
       const cStatus = 0;
 
       if (!email || !images || !kind || !name) {
-          return {
-              statusCode: 400,
-              body: JSON.stringify({
-                  error: true,
-                  message:
-                      'Please provide all "email" and "images" and "kind" and "name"',
-              }),
-          };
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Please provide all "email" and "images" and "kind" and "name"',
+          }),
+        };
       }
 
       // check email format
       var re = /\S+@\S+\.\S+/;
       if (!re.test(email)) {
-          return {
-              statusCode: 400,
-              body: JSON.stringify({
-                  error: true,
-                  message: 'Please provide valid email',
-              }),
-          };
-      }
-
-      if(images.length<8 || images.length>20){
         return {
           statusCode: 400,
           body: JSON.stringify({
-              error: true,
-              message:
-                  'Please 8-20 images',
+            error: true,
+            message: 'Please provide valid email',
           }),
-      };
+        };
+      }
+
+      if (images.length < 8 || images.length > 20) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Please 8-20 images',
+          }),
+        };
       }
       // save images to s3
       let i = 0;
 
       for (const image of images) {
-          const params = {
-              Bucket: Bucket.Uploads.bucketName,
-              Key: `${collectionId}/sks/sks (${i}).jpg`,
-              Body: Buffer.from(image, 'base64'),
-              ContentEncoding: 'base64',
-              ContentType: 'image/jpeg',
-              // ACL: 'public-read',
-          };
-          await s3.putObject(params);
-          i += 1;
+        const params = {
+          Bucket: Bucket.Uploads.bucketName,
+          Key: `${collectionId}/sks/sks (${i}).jpg`,
+          Body: Buffer.from(image, 'base64'),
+          ContentEncoding: 'base64',
+          ContentType: 'image/jpeg',
+          // ACL: 'public-read',
+        };
+        await s3.putObject(params);
+        i += 1;
       }
 
       // generate 6 digit alphabet and number secret key
       let secretKey = '';
       for (i = 0; i < 6; i++) {
-          secretKey += choose('abcdefghijklmnopqrstuvwxyz0123456789');
+        secretKey += choose('abcdefghijklmnopqrstuvwxyz0123456789');
       }
 
       await dynamoDb.putItem({
-          TableName: Table.Collections.tableName,
-          Item: {
-              collectionId: { S: collectionId },
-              email: { S: email },
-              name: { S: name },
-              cStatus: { N: cStatus.toString() },
-              createDatetime: { S: currentDatetime },
-              startDatetime: { S: '' },
-              endDatetime: { S: '' },
-              paymentKey: { S: '' },
-              kind: { S: kind },
-              paid: { BOOL: false },
-              price: { N: BASE_PRICE.toString() },
-              secretKey: { S: secretKey },
-              receipt: { S: '' },
-          },
+        TableName: Table.Collections.tableName,
+        Item: {
+          collectionId: { S: collectionId },
+          email: { S: email },
+          name: { S: name },
+          cStatus: { N: cStatus.toString() },
+          createDatetime: { S: currentDatetime },
+          startDatetime: { S: '' },
+          endDatetime: { S: '' },
+          paymentKey: { S: '' },
+          kind: { S: kind },
+          paid: { BOOL: false },
+          price: { N: BASE_PRICE.toString() },
+          secretKey: { S: secretKey },
+          receipt: { S: '' },
+        },
       });
 
       // send email with template collectionCreated
       await sendEmail(
-          'collectionCreated',
-          email,
-          name,
-          collectionId,
-          secretKey
+        'collectionCreated',
+        email,
+        name,
+        collectionId,
+        secretKey
       );
 
       return {
-          statusCode: 200,
+        statusCode: 200,
+        body: JSON.stringify({
+          collectionId: collectionId,
+          email: email,
+        }),
+      };
+    } else if (event.rawPath === '/payment') {
+      // get data from request body
+      if (event.body == undefined) {
+        return {
+          statusCode: 400,
           body: JSON.stringify({
-              collectionId: collectionId,
-              email: email,
+            error: true,
+            message: 'Invalid request body',
           }),
+        };
+      }
+      const body = JSON.parse(event.body);
+      const collectionId = body.collectionId;
+      const paymentKey = body.paymentKey;
+      const price = body.price;
+
+      // logs
+      console.log('TRYING TO PAYMENT CONFIRM: ');
+      console.log('collectionId: ', collectionId);
+      console.log('PAYMENTKEY: ', paymentKey);
+      console.log('PRICE: ', price);
+
+      // get data from collections table
+      const params = {
+        Key: { collectionId: { S: collectionId } },
+        TableName: Table.Collections.tableName,
       };
-  } else if (event.rawPath === '/payment') {
+
+      const { Item } = await dynamoDb.getItem(params);
+
+      if (
+        !Item ||
+        Item.email.S == undefined ||
+        Item.name.S == undefined ||
+        Item.secretKey.S == undefined
+      ) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided "collectionId"',
+          }),
+        };
+      }
+
+      // check payment
+      if (Item.paid.BOOL == true) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Already paid',
+          }),
+        };
+      }
+
+      // check price
+      if (BASE_PRICE != parseInt(price)) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Price is not correct',
+          }),
+        };
+      }
+
+      // confirm to toss payment api
+      let receipt = '';
+      let url = 'https://api.tosspayments.com/v1/payments/confirm';
+      let headers = {
+        'Content-Type': 'application/json',
+        Authorization:
+          'Basic ' +
+          Buffer.from(Config.TOSS_PAYMENTS_API_KEY + ':').toString(
+            'base64'
+          ),
+      };
+      let data = {
+        paymentKey: paymentKey,
+        amount: price,
+        orderId: collectionId,
+      };
+
+      let response = await fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(data),
+      });
+
+      if (response.status != 200) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Payment is not confirmed',
+          }),
+        };
+      }
+
+      const responseJson = (await response.json()) as any;
+      if (responseJson?.receipt == undefined) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Payment is not confirmed',
+          }),
+        };
+      }
+      receipt = responseJson?.receipt.url;
+
+      // update paid to true and enter paymentKey and price
+      await dynamoDb.updateItem({
+        TableName: Table.Collections.tableName,
+        Key: { collectionId: { S: collectionId } },
+        UpdateExpression:
+          'set paid = :p, paymentKey = :pk, price = :pr, receipt = :r',
+        ExpressionAttributeValues: {
+          ':p': { BOOL: true },
+          ':pk': { S: paymentKey },
+          ':pr': { N: price },
+          ':r': { S: receipt },
+        },
+      });
+
+      // send email
+      await sendEmail(
+        'paymentComplete',
+        Item.email.S,
+        Item.name.S,
+        collectionId,
+        Item.secretKey.S
+      );
+
+      // send email for alert me
+      await sendEmail(
+        'paymentCompleteAlert',
+        Item.email.S,
+        Item.name.S,
+        collectionId,
+        Item.secretKey.S
+      );
+
       return {
         statusCode: 200,
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          receipt: receipt,
+          secretKey: Item.secretKey.S,
+        }),
       };
+
     } else if (event.rawPath === '/execBanana') {
-      return {
+      if (event.body == undefined) {
+        return {
+            statusCode: 400,
+            body: JSON.stringify({
+                error: true,
+                message: 'Invalid request body',
+            }),
+        };
+    }
+    const body = JSON.parse(event.body);
+    const collectionId = body.collectionId;
+
+    console.log('EXEC BANANA: ', collectionId);
+
+    // get data from collections table
+    const params = {
+        Key: { collectionId: { S: collectionId } },
+        TableName: Table.Collections.tableName,
+    };
+
+    const { Item } = await dynamoDb.getItem(params);
+
+    if (
+        !Item ||
+        Item.email.S == undefined ||
+        Item.secretKey.S == undefined ||
+        Item.kind.S == undefined
+    ) {
+        return {
+            statusCode: 404,
+            body: JSON.stringify({
+                error: true,
+                message:
+                    'Could not find collection with provided "collectionId"',
+            }),
+        };
+    }
+
+    const kind = Item.kind.S;
+    const secretKey = Item.secretKey.S;
+
+    // check is paid and cStatus == 0
+    if (Item.paid.BOOL == false) {
+        return {
+            statusCode: 400,
+            body: JSON.stringify({
+                error: true,
+                message: 'Not paid',
+            }),
+        };
+    }
+
+    if (Item.cStatus.N != '0') {
+        return {
+            statusCode: 400,
+            body: JSON.stringify({
+                error: true,
+                message: 'Already executed',
+            }),
+        };
+    }
+
+    // update cStatus to 1
+    await dynamoDb.updateItem({
+        TableName: Table.Collections.tableName,
+        Key: { collectionId: { S: collectionId } },
+        UpdateExpression: 'set cStatus = :p',
+        ExpressionAttributeValues: {
+            ':p': { N: '1' },
+        },
+    });
+
+    return {
         statusCode: 200,
         body: JSON.stringify({}),
-      };
+    };
     } else if (event.rawPath === '/checkStartDatetime') {
       return {
         statusCode: 200,
