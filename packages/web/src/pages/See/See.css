@@ -1,0 +1,18 @@
+.result-image {
+    width: 23%;
+    height: 23%;
+    margin: 6px;
+}
+
+/* 모바일 뷰 */
+@media only screen and (max-width: 768px) {
+    .result-image-container {
+        padding: 20px 0;
+    }
+
+    .result-image {
+        width: 80%;
+        height: 80%;
+        margin: 6px;
+    }
+}

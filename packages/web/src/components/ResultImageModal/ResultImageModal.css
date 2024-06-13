@@ -1,0 +1,26 @@
+.mobile-download-guide {
+    display: none;
+    text-align: center;
+    margin-top: 20px;
+    font-size: 18px;
+}
+
+.pc-download-guide {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 18px;
+}
+
+@media only screen and (max-width: 768px) {
+    .modal-result-image {
+        width: 80vw;
+    }
+ 
+		.pc-download-guide {
+			display: none;
+		}
+
+		.mobile-download-guide {
+			display: block;
+		}
+}

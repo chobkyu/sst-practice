@@ -65,7 +65,7 @@ export function API({ stack }: StackContext) {
     environment: {
       // 앞에 VITE_를 붙여야 클라이언트에서 접근 가능
       VITE_API_URL: api.customDomainUrl || api.url,
-      VITE_APP_URL: 'http://localhost:5173',
+      VITE_APP_URL: 'https://d3tzjazbu8jqcb.cloudfront.net',
       VITE_TOSS_CLIENT_KEY: 'test_ck_jExPeJWYVQ4XPE7d5RWE349R5gvN',
     },
     buildOutput: 'dist',

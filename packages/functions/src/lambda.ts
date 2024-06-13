@@ -6,6 +6,7 @@ import { Table } from 'sst/node/table';
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import { S3, S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fetch from "node-fetch";
 
 const dynamoDb = new DynamoDB({ region: 'ap-northeast-2' });
@@ -62,10 +63,111 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
         }),
       };
     } else if (event.rawPath === '/getImages') {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({}),
-      };
+      const collectionId = event.queryStringParameters?.collectionId;
+            const secretKey = event.queryStringParameters?.secretKey;
+
+            if (!collectionId || !secretKey) {
+                return {
+                    statusCode: 400,
+                    body: JSON.stringify({
+                        error: true,
+                        message:
+                            'Please provide both "collectionId" and "secretKey"',
+                    }),
+                };
+            }
+
+            // get collection info
+            const params = {
+                Key: { collectionId: { S: collectionId } },
+                TableName: Table.Collections.tableName,
+            };
+
+            const { Item } = await dynamoDb.getItem(params);
+
+            if (
+                !Item ||
+                Item.email.S == undefined ||
+                Item.name.S == undefined ||
+                Item.secretKey.S == undefined
+            ) {
+                return {
+                    statusCode: 404,
+                    body: JSON.stringify({
+                        error: true,
+                        message:
+                            'Could not find collection with provided "collectionId"',
+                    }),
+                };
+            }
+
+            if (Item.secretKey.S != secretKey) {
+                return {
+                    statusCode: 404,
+                    body: JSON.stringify({
+                        error: true,
+                        message:
+                            'Could not find collection with provided secretKey',
+                    }),
+                };
+            }
+
+            // if cStatus is not 2 (completed), return error
+            if (Item.cStatus.N != '2') {
+                return {
+                    statusCode: 400,
+                    body: JSON.stringify({
+                        error: true,
+                        message: 'image is not ready',
+                    }),
+                };
+            }
+
+            // get list of s3 objects in collection's folder
+            const response = await s3.listObjectsV2({
+                Bucket: Bucket.Uploads.bucketName,
+                Prefix: `${collectionId}/results/`,
+            });
+
+            // if collection's folder is empty, return error
+            if (!response.Contents) {
+                return {
+                    statusCode: 400,
+                    body: JSON.stringify({
+                        error: true,
+                        message: 'no image found',
+                    }),
+                };
+            }
+
+            // generate presigned url for every image in collection's folder
+            let urls = [];
+            // sort by last modified time
+            response.Contents.sort(
+                (a: any, b: any) =>
+                    parseInt(a.Key.split('result (')[1].split(')')[0]) -
+                    parseInt(b.Key.split('result (')[1].split(')')[0])
+            );
+            const s3Client = new S3Client({ region: 'ap-northeast-2' });
+            for (const obj of response.Contents) {
+                const getObjectParams = {
+                    Bucket: Bucket.Uploads.bucketName,
+                    Key: obj.Key,
+                };
+                const command = new GetObjectCommand(getObjectParams);
+                // presigned url will expire in 1 hour
+                const url = await getSignedUrl(s3Client, command, {
+                    expiresIn: 3600,
+                });
+                urls.push(url);
+            }
+
+            return {
+                statusCode: 200,
+                body: JSON.stringify({
+                    urls: urls,
+                }),
+            };
     } else {
       return {
         statusCode: 404,
@@ -77,9 +179,150 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     }
   } else if (event.requestContext.http.method === 'POST') {
     if (event.rawPath === '/updateCollectionStatus') {
+      // get collectionId, secretKey, cStatus, bananaSecretKey
+      if (event.body == undefined) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
+        };
+      }
+      const body = JSON.parse(event.body);
+      const collectionId = body.collectionId;
+      const secretKey = body.secretKey;
+      const cStatus = body.cStatus;
+      const bananaSecretKey = body.bananaSecretKey;
+
+      // check bananaSecretKey
+      if (bananaSecretKey != Config.BANANA_SECRET_KEY) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided bananaSecretKey',
+          }),
+        };
+      }
+
+      // get current time
+      const currentDatetime = new Date().toISOString();
+
+      if (!collectionId || !secretKey || !cStatus) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Please provide both "collectionId" and "cStatus" and "secretKey"',
+          }),
+        };
+      }
+
+      // check secretKey
+      const params = {
+        Key: { collectionId: { S: collectionId } },
+        TableName: Table.Collections.tableName,
+      };
+
+      const { Item } = await dynamoDb.getItem(params);
+
+      if (
+        !Item ||
+        Item.email.S == undefined ||
+        Item.name.S == undefined ||
+        Item.secretKey.S == undefined
+      ) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided "collectionId"',
+          }),
+        };
+      }
+
+      if (Item.secretKey.S != secretKey) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided secretKey',
+          }),
+        };
+      }
+
+      if (parseInt(cStatus) == 1) {
+        // if cStatus is 1, update startDatetime
+        console.log('Dreambooth started!');
+        console.log('collectionId: ', collectionId);
+        console.log('startDatetime: ', currentDatetime);
+        await dynamoDb.updateItem({
+          TableName: Table.Collections.tableName,
+          Key: { collectionId: { S: collectionId } },
+          UpdateExpression: 'set cStatus = :p, startDatetime = :s',
+          ExpressionAttributeValues: {
+            ':p': { N: '1' },
+            ':s': { S: currentDatetime },
+          },
+        });
+      } else if (parseInt(cStatus) == 2) {
+        // if cStatus is 2, update endDatetime
+        console.log('Dreambooth ended!');
+        console.log('collectionId: ', collectionId);
+        console.log('endDatetime: ', currentDatetime);
+        await dynamoDb.updateItem({
+          TableName: Table.Collections.tableName,
+          Key: { collectionId: { S: collectionId } },
+          UpdateExpression: 'set cStatus = :p, endDatetime = :e',
+          ExpressionAttributeValues: {
+            ':p': { N: '2' },
+            ':e': { S: currentDatetime },
+          },
+        });
+        // send email with template image ready
+        await sendEmail(
+          'imageReady',
+          Item.email.S,
+          Item.name.S,
+          collectionId,
+          Item.secretKey.S
+        );
+      } else if (parseInt(cStatus) == 3) {
+        // if cStatus is 3, update endDatetime
+        console.log('Dreambooth ERROR!');
+        console.log('collectionId: ', collectionId);
+        console.log('endDatetime: ', currentDatetime);
+        await dynamoDb.updateItem({
+          TableName: Table.Collections.tableName,
+          Key: { collectionId: { S: collectionId } },
+          UpdateExpression: 'set cStatus = :p, endDatetime = :e',
+          ExpressionAttributeValues: {
+            ':p': { N: '3' },
+            ':e': { S: currentDatetime },
+          },
+        });
+        // cancel the payment
+        await cancelPayment(collectionId);
+      } else {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid cStatus',
+          }),
+        };
+      }
+
       return {
         statusCode: 200,
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          collectionId: collectionId,
+        }),
       };
     } else if (event.rawPath === '/createCollection') {
       const collectionId = uuidv4();
@@ -348,89 +591,258 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     } else if (event.rawPath === '/execBanana') {
       if (event.body == undefined) {
         return {
-            statusCode: 400,
-            body: JSON.stringify({
-                error: true,
-                message: 'Invalid request body',
-            }),
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
         };
-    }
-    const body = JSON.parse(event.body);
-    const collectionId = body.collectionId;
+      }
+      const body = JSON.parse(event.body);
+      const collectionId = body.collectionId;
 
-    console.log('EXEC BANANA: ', collectionId);
+      console.log('EXEC BANANA: ', collectionId);
 
-    // get data from collections table
-    const params = {
+      // get data from collections table
+      const params = {
         Key: { collectionId: { S: collectionId } },
         TableName: Table.Collections.tableName,
-    };
+      };
 
-    const { Item } = await dynamoDb.getItem(params);
+      const { Item } = await dynamoDb.getItem(params);
 
-    if (
+      if (
         !Item ||
         Item.email.S == undefined ||
         Item.secretKey.S == undefined ||
         Item.kind.S == undefined
-    ) {
+      ) {
         return {
-            statusCode: 404,
-            body: JSON.stringify({
-                error: true,
-                message:
-                    'Could not find collection with provided "collectionId"',
-            }),
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided "collectionId"',
+          }),
         };
-    }
+      }
 
-    const kind = Item.kind.S;
-    const secretKey = Item.secretKey.S;
+      const kind = Item.kind.S;
+      const secretKey = Item.secretKey.S;
 
-    // check is paid and cStatus == 0
-    if (Item.paid.BOOL == false) {
+      // check is paid and cStatus == 0
+      if (Item.paid.BOOL == false) {
         return {
-            statusCode: 400,
-            body: JSON.stringify({
-                error: true,
-                message: 'Not paid',
-            }),
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Not paid',
+          }),
         };
-    }
+      }
 
-    if (Item.cStatus.N != '0') {
+      if (Item.cStatus.N != '0') {
         return {
-            statusCode: 400,
-            body: JSON.stringify({
-                error: true,
-                message: 'Already executed',
-            }),
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Already executed',
+          }),
         };
-    }
+      }
 
-    // update cStatus to 1
-    await dynamoDb.updateItem({
+      // /execBanana 부분 중 하단부의 코드를 바나나에서 가져온 정보로 아래와 같이 수정
+      // update cStatus to 1
+      await dynamoDb.updateItem({
         TableName: Table.Collections.tableName,
         Key: { collectionId: { S: collectionId } },
         UpdateExpression: 'set cStatus = :p',
         ExpressionAttributeValues: {
-            ':p': { N: '1' },
+          ':p': { N: '1' },
         },
-    });
+      });
 
-    return {
-        statusCode: 200,
-        body: JSON.stringify({}),
-    };
-    } else if (event.rawPath === '/checkStartDatetime') {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({}),
+      const inputs = {
+        input: {
+          collection_id: collectionId,
+          kind: kind,
+          secret_key: secretKey,
+          n_save_sample: 20, // 생성할 샘플의 수
+          save_sample_negative_prompt:
+            'frame, paper, letter, signature, keen eyes, two heads, siamese, two tongues, logo, half man half beast, three legs, too vivid, too realistic',
+          save_guidance_scale: 8.5,
+          num_class_images: 200, // 이번 강의에서는 다루지 않지만 우선 고정
+          steps: 400, // 이 숫자를 늘리면 오래걸리지만 더 많이 학습함
+          art_styles: [
+            // 이부분을 수정해서 유화 대신 스케치를 그릴 수도 있고 나만의 프롬프트로 개조가 가능함
+            `oil painting portrait of a ((zwx ${kind})), face shot`,
+            `oil painting portrait of a ((zwx ${kind})), full body shot`,
+          ],
+        },
       };
-    } else if (event.rawPath === '/cancelPayment') {
+
+      // RunPod를 돌리지 않을 때는 아래 runit을 false로 변경
+      const runit = true;
+      let outJson = {} as any;
+      if (runit) {
+        // RunPod이 실질적으로 돌아가는 코드
+        const header = {
+          'Content-Type': 'application/json',
+          authorization: '3X33VNMOZLBTJDQIC609ZTJCSYF2FU1SHO2CTAYW',
+        };
+        let url = 'https://api.runpod.ai/v2/3vgw2gg02bws2d/run';
+
+        let response = await fetch(url, {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify(inputs)
+        });
+
+        outJson = await response.json();
+        const outId = outJson?.id;
+        try {
+          url = `https://api.runpod.ai/v2/3vgw2gg02bws2d/status/${outId}`;
+          response = await fetch(url, {
+            method: 'POST',
+            headers: header,
+            body: JSON.stringify(inputs),
+          });
+          const outStatus = (await response.json()) as any;
+        } catch (error) {
+          console.log('STATUS_TIMEOUT');
+        }
+      } else {
+        outJson = { result: 'success' };
+      }
+
       return {
         statusCode: 200,
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          outJson: outJson,
+        }),
+      };
+    } else if (event.rawPath === '/checkStartDatetime') {
+      // get collectionId, secretKey, bananaSecretKey
+      if (event.body == undefined) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
+        };
+      }
+      const body = JSON.parse(event.body);
+      const collectionId = body.collectionId;
+      const secretKey = body.secretKey;
+      const bananaSecretKey = body.bananaSecretKey;
+
+      // check bananaSecretKey
+      if (bananaSecretKey != Config.BANANA_SECRET_KEY) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message: 'bananaSecretKey error',
+          }),
+        };
+      }
+
+      if (!collectionId || !secretKey) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Please provide both "collectionId" and "cStatus" and "secretKey"',
+          }),
+        };
+      }
+
+      // check secretKey
+      const params = {
+        Key: { collectionId: { S: collectionId } },
+        TableName: Table.Collections.tableName,
+      };
+
+      const { Item } = await dynamoDb.getItem(params);
+
+      if (
+        !Item ||
+        Item.email.S == undefined ||
+        Item.name.S == undefined ||
+        Item.secretKey.S == undefined
+      ) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided "collectionId"',
+          }),
+        };
+      }
+
+      if (Item.secretKey.S != secretKey) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: true,
+            message:
+              'Could not find collection with provided secretKey',
+          }),
+        };
+      }
+
+      // check startDatetime is empty
+      const startDatetime = Item.startDatetime.S;
+      if (startDatetime != '') {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            startDatetime: startDatetime,
+          }),
+        };
+      }
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          startDatetime: '',
+        }),
+      };
+
+    } else if (event.rawPath === '/cancelPayment') {
+      if (event.body == undefined) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'Invalid request body',
+          }),
+        };
+      }
+      const body = JSON.parse(event.body);
+
+      const collectionId = body.collectionId;
+      const result = await cancelPayment(collectionId);
+
+      if (result == false) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: true,
+            message: 'failed to cancel payment',
+          }),
+        };
+      }
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          result: result,
+          message: 'your payment has been cancelled',
+        }),
       };
     } else {
       // error handler
@@ -456,7 +868,7 @@ async function sendEmail(
 ) {
   let subject = '';
   let body = '';
-  let baseURL = 'http://localhost:5173';
+  let baseURL = 'https://d3tzjazbu8jqcb.cloudfront.net';
 
   if (template == 'collectionCreated') {
     subject = `[레이몽] ${name} 컬렉션 생성이 준비되었습니다!`;
@@ -515,4 +927,80 @@ async function sendEmail(
 function choose(choices: string) {
   var index = Math.floor(Math.random() * choices.length);
   return choices[index];
+}
+
+async function cancelPayment(collectionId: string) {
+  if (collectionId == undefined) {
+    return false;
+  }
+  // get collection info
+  const params = {
+    Key: { collectionId: { S: collectionId } },
+    TableName: Table.Collections.tableName,
+  };
+
+  const { Item } = await dynamoDb.getItem(params);
+
+  if (
+    !Item ||
+    Item.email.S == undefined ||
+    Item.name.S == undefined ||
+    Item.secretKey.S == undefined
+  ) {
+    return false;
+  }
+
+  // if cStatus is not 3 (error), return error
+  if (Item.cStatus.N != '3') {
+    return false;
+  }
+
+  // request cancel to toss
+  const url =
+    'https://api.tosspayments.com/v1/payments/' +
+    Item.paymentKey.S +
+    '/cancel';
+
+  let headers = {
+    'Content-Type': 'application/json',
+    Authorization:
+      'Basic ' +
+      Buffer.from(Config.TOSS_PAYMENTS_API_KEY + ':').toString('base64'),
+  };
+
+  let data = {
+    cancelReason: 'user cancelled payment because of error',
+  };
+
+  let toss_response = await fetch(url, {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify(data),
+  });
+
+  // if toss returns error, return error
+  if (toss_response.status != 200) {
+    return false;
+  }
+
+  // cancel payment
+  await dynamoDb.updateItem({
+    TableName: Table.Collections.tableName,
+    Key: { collectionId: { S: collectionId } },
+    UpdateExpression: 'set cStatus = :p',
+    ExpressionAttributeValues: {
+      ':p': { N: '4' },
+    },
+  });
+
+  // send email
+  await sendEmail(
+    'paymentCancelled',
+    Item.email.S,
+    Item.name.S,
+    collectionId,
+    Item.secretKey.S
+  );
+
+  return true;
 }
